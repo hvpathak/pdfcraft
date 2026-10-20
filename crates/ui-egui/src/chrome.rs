@@ -326,7 +326,8 @@ fn theme_and_help(app: &mut PdfCraftApp, ui: &mut egui::Ui, button: f32) {
     }
 }
 
-/// Both theme entry points use the same choices and command path.fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+/// Both theme entry points use the same choices and command path.
+fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     for (preference, command, label) in [
         (ThemePreference::System, "view.theme.system", "Use system setting"),
         (ThemePreference::Light, "view.theme.light", "Light gray"),
