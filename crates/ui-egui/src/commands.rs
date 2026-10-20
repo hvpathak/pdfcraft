@@ -207,11 +207,15 @@ impl PdfCraftApp {
                 }
                 self.dialog = Some(Dialog::NumberPages);
             }
-            link if pdfcraft_engine::links::for_command(link).is_some() => {
-                if let Some(l) = pdfcraft_engine::links::for_command(link) {
-                    self.open_url(l.url);
+            link if pdfcraft_engine::links::for_command(link).is_some() => match (link, self.help_url.clone()) {
+                _ if self.hides_command(link) => {}
+                ("help.github", Some(url)) => self.open_url(&url),
+                _ => {
+                    if let Some(l) = pdfcraft_engine::links::for_command(link) {
+                        self.open_url(l.url);
+                    }
                 }
-            }
+            },
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
             "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
             "edit.undo" => self.undo(),
@@ -671,8 +675,8 @@ impl PdfCraftApp {
             }
             "page.split" => self.dialog = Some(Dialog::Split),
             "help.shortcuts" => self.dialog = Some(Dialog::Shortcuts),
-            "help.about" => self.dialog = Some(Dialog::About),
-            "help.check_updates" => self.check_for_updates(),
+            "help.about" if !self.embedded => self.dialog = Some(Dialog::About),
+            "help.check_updates" if !self.embedded => self.check_for_updates(),
             _ => return false,
         }
         true
@@ -766,8 +770,13 @@ fn tab_after(current: Option<usize>, count: usize, forward: bool) -> Option<usiz
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
 pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
     for spec in commands::menu(menu) {
+        if app.hides_command(spec.id) {
+            continue;
+        }
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
         let label = crate::i18n::menu_label(spec.id, &label);
+        // An embedding app's Help page stands in for the project's GitHub page.
+        let label = if app.help_url.is_some() && spec.id == "help.github" { tl!("Help").to_string() } else { label };
         // Open Recent is a submenu of the live recent list, not one action: disabled while the
         // list is empty, otherwise each entry opens its file (or focuses the tab showing it), and
         // Clear Recent Files at the foot empties the list (#430).

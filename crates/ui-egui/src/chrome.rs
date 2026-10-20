@@ -62,212 +62,215 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(window_controls::SIDE_GAP - 4.0);
                 }
-                if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
-                    app.active = None;
-                    app.combine_tab.focused = false;
-                }
-                // Keep the two icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
-                let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 2.0 * button
-                    + 50.0
-                    + window_controls::width(&controls.right);
-                // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
-                let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
-                let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
-                // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
-                // their narrowest; then arrows either side say so and step through them.
-                let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
-                for i in 0..app.views.len() {
-                    if let Some(name) = crate::canvas::tab_label(app, i) {
-                        natural.push(tab_natural_width(ui, &t, &name));
+                // An embedding app's own tabs replace Home, the document tabs and Open.
+                if !app.embedded {
+                    if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
+                        app.active = None;
+                        app.combine_tab.focused = false;
                     }
-                }
-                if app.combine_tab.open {
-                    natural.push(tab_natural_width(ui, &t, tl!("Combine files")));
-                }
-                let gap = ui.spacing().item_spacing.x;
-                let overflow = tabs_overflow(&natural, tabs_width, gap, TAB_MIN_WIDTH);
-                if overflow {
-                    tabs_width = (tabs_width - 2.0 * (TAB_ARROW + gap)).max(0.0);
-                }
-                let cap = tab_cap(&natural, tabs_width, gap, TAB_MIN_WIDTH);
-                // Where the tabs were scrolled to last frame, and how far they can go.
-                let scroll_id = ui.id().with("tab_scroll");
-                let (offset, max_offset) = ui.data(|d| d.get_temp::<(f32, f32)>(scroll_id)).unwrap_or((0.0, 0.0));
-                let mut scroll_to = None;
-                if overflow && arrow(ui, "chevron-left", offset > 0.5, tl!("Scroll tabs left")) {
-                    scroll_to = Some((offset - (TAB_MIN_WIDTH + gap)).max(0.0));
-                }
-                // Keyed by document, not index: a tab dragged past the active one moves it without
-                // the strip jumping to it.
-                let state = (app.active_ids().map(|(_, id)| id), app.views.len(), app.combine_showing());
-                let changed = ui.data_mut(|data| {
-                    let id = ui.id().with("active_tab");
-                    let changed = data.get_temp::<(Option<pdfcraft_engine::DocId>, usize, bool)>(id) != Some(state);
-                    data.insert_temp(id, state);
-                    changed
-                });
-                let mut action = None;
-                let mut close = None;
-                // The pointer's x while a tab is dragged, for scrolling at the strip's edges.
-                let mut drag_x = None;
-                ui.scope(|ui| {
-                    ui.style_mut().always_scroll_the_only_direction = true;
-                    let mut area = egui::ScrollArea::horizontal().id_salt("document_tabs").max_width(tabs_width).auto_shrink([true, true]);
-                    if let Some(x) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))) {
-                        area = area.horizontal_scroll_offset(x);
-                    }
-                    let out = area.show(ui, |ui| {
-                        ui.horizontal_centered(|ui| {
-                            // Each document tab's index and rect, and the one being dragged
-                            // (with whether it was just released).
-                            let mut slots = Vec::with_capacity(app.views.len());
-                            let mut dragged = None;
-                            for i in 0..app.views.len() {
-                                let Some(doc) = app.session.get(app.views[i].id) else { continue };
-                                let Some(name) = crate::canvas::tab_label(app, i) else { continue };
-                                let dirty = doc.dirty;
-                                // A tab showing the document's title names its file on hover.
-                                let file = (name != doc.name).then_some(doc.name.as_str());
-                                let response = tab(
-                                    ui,
-                                    ui.id().with(("document-tab", app.views[i].id)),
-                                    &t,
-                                    "file-text",
-                                    &name,
-                                    file,
-                                    dirty,
-                                    app.active == Some(i),
-                                    &mut close,
-                                    i,
-                                    cap,
-                                    tab_h,
-                                    true,
-                                );
-                                slots.push((i, response.rect));
-                                if response.dragged() || response.drag_stopped() {
-                                    dragged = Some((i, response.drag_stopped()));
-                                }
-                                if changed && app.active == Some(i) && !app.combine_showing() {
-                                    response.scroll_to_me(Some(Align::Center));
-                                }
-                                let id = app.views[i].id;
-                                let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
-                                response.context_menu(|ui| {
-                                    if ui.button(tl!("Close Tab")).clicked() {
-                                        action = Some(crate::tab_context::Action::Close(id));
-                                        ui.close();
-                                    }
-                                    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
-                                        action = Some(crate::tab_context::Action::Reopen);
-                                        ui.close();
-                                    }
-                                    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
-                                    if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
-                                        action = Some(crate::tab_context::Action::Reveal(id));
-                                        ui.close();
-                                    }
-                                });
-                                if response.clicked() {
-                                    app.active = Some(i);
-                                }
-                                // A middle click closes the tab, as in Acrobat and browsers (#1853);
-                                // unsaved changes ask first, as the close button does.
-                                if response.middle_clicked() {
-                                    close = Some(i);
-                                }
-                            }
-                            // Dragging a tab moves it (#1537): a line marks the gap it will land
-                            // in, and releasing the button drops it there.
-                            if let Some((from, released)) = dragged
-                                && let Some(x) = ui.ctx().pointer_latest_pos().map(|p| p.x)
-                            {
-                                let to = drop_index(&slots, from, x);
-                                if released {
-                                    if close.is_none() && action.is_none() {
-                                        app.move_tab(from, to);
-                                    }
-                                } else {
-                                    drag_x = Some(x);
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    if let Some(marker) = drop_marker(&slots, from, to, ui.spacing().item_spacing.x) {
-                                        let span = slots.first().map_or(ui.max_rect().y_range(), |(_, r)| r.y_range());
-                                        // In front of the first tab the gap lies outside the scroll area's
-                                        // clip rect (#2225): keep the whole line inside it.
-                                        let clip = ui.clip_rect();
-                                        let marker = marker.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
-                                        ui.painter().vline(marker, span.shrink(4.0), Stroke::new(2.0, t.accent));
-                                    }
-                                }
-                            }
-                            if let Some(i) = close
-                                && let Some(view) = app.views.get(i)
-                            {
-                                action.get_or_insert(crate::tab_context::Action::Close(view.id));
-                            }
-                            if let Some(action) = action {
-                                app.tab_action(action);
-                            }
-                            if app.combine_tab.open {
-                                // After the document tabs; its index can't clash with theirs.
-                                let mut close = None;
-                                let response = tab(
-                                    ui,
-                                    ui.id().with("combine-tab"),
-                                    &t,
-                                    "files",
-                                    tl!("Combine files"),
-                                    None,
-                                    false,
-                                    app.combine_showing(),
-                                    &mut close,
-                                    usize::MAX,
-                                    cap,
-                                    tab_h,
-                                    false,
-                                );
-                                if changed && app.combine_showing() {
-                                    response.scroll_to_me(Some(Align::Center));
-                                }
-                                if response.clicked() {
-                                    app.open_combine_tab();
-                                }
-                                if close.is_some() || response.middle_clicked() {
-                                    app.close_combine_tab();
-                                }
-                            }
-                        });
-                    });
-                    let max = (out.content_size.x - out.inner_rect.width()).max(0.0);
-                    ui.data_mut(|d| d.insert_temp(scroll_id, (out.state.offset.x, max)));
-                    // A tab dragged to either edge of a strip that scrolls brings the hidden tabs in.
-                    if let Some(x) = drag_x
-                        && max > 0.0
-                    {
-                        let step = if x < out.inner_rect.left() + TAB_DRAG_EDGE {
-                            -TAB_DRAG_STEP
-                        } else if x > out.inner_rect.right() - TAB_DRAG_EDGE {
-                            TAB_DRAG_STEP
-                        } else {
-                            0.0
-                        };
-                        if step != 0.0 {
-                            ui.data_mut(|d| d.insert_temp(scroll_id.with("to"), (out.state.offset.x + step).clamp(0.0, max)));
-                            ui.ctx().request_repaint();
+                    // Keep the two icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
+                    let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
+                        + 2.0 * button
+                        + 50.0
+                        + window_controls::width(&controls.right);
+                    // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
+                    let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
+                    let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
+                    // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
+                    // their narrowest; then arrows either side say so and step through them.
+                    let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
+                    for i in 0..app.views.len() {
+                        if let Some(name) = crate::canvas::tab_label(app, i) {
+                            natural.push(tab_natural_width(ui, &t, &name));
                         }
                     }
-                });
-                if overflow && arrow(ui, "chevron-right", offset < max_offset - 0.5, tl!("Scroll tabs right")) {
-                    scroll_to = Some((offset + TAB_MIN_WIDTH + gap).min(max_offset));
-                }
-                if let Some(x) = scroll_to {
-                    ui.data_mut(|d| d.insert_temp(scroll_id.with("to"), x));
-                    ui.ctx().request_repaint();
-                }
-                ui.add_space(4.0);
-                let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
-                if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
-                    app.open_dialog();
+                    if app.combine_tab.open {
+                        natural.push(tab_natural_width(ui, &t, tl!("Combine files")));
+                    }
+                    let gap = ui.spacing().item_spacing.x;
+                    let overflow = tabs_overflow(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                    if overflow {
+                        tabs_width = (tabs_width - 2.0 * (TAB_ARROW + gap)).max(0.0);
+                    }
+                    let cap = tab_cap(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                    // Where the tabs were scrolled to last frame, and how far they can go.
+                    let scroll_id = ui.id().with("tab_scroll");
+                    let (offset, max_offset) = ui.data(|d| d.get_temp::<(f32, f32)>(scroll_id)).unwrap_or((0.0, 0.0));
+                    let mut scroll_to = None;
+                    if overflow && arrow(ui, "chevron-left", offset > 0.5, tl!("Scroll tabs left")) {
+                        scroll_to = Some((offset - (TAB_MIN_WIDTH + gap)).max(0.0));
+                    }
+                    // Keyed by document, not index: a tab dragged past the active one moves it without
+                    // the strip jumping to it.
+                    let state = (app.active_ids().map(|(_, id)| id), app.views.len(), app.combine_showing());
+                    let changed = ui.data_mut(|data| {
+                        let id = ui.id().with("active_tab");
+                        let changed = data.get_temp::<(Option<pdfcraft_engine::DocId>, usize, bool)>(id) != Some(state);
+                        data.insert_temp(id, state);
+                        changed
+                    });
+                    let mut action = None;
+                    let mut close = None;
+                    // The pointer's x while a tab is dragged, for scrolling at the strip's edges.
+                    let mut drag_x = None;
+                    ui.scope(|ui| {
+                        ui.style_mut().always_scroll_the_only_direction = true;
+                        let mut area = egui::ScrollArea::horizontal().id_salt("document_tabs").max_width(tabs_width).auto_shrink([true, true]);
+                        if let Some(x) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))) {
+                            area = area.horizontal_scroll_offset(x);
+                        }
+                        let out = area.show(ui, |ui| {
+                            ui.horizontal_centered(|ui| {
+                                // Each document tab's index and rect, and the one being dragged
+                                // (with whether it was just released).
+                                let mut slots = Vec::with_capacity(app.views.len());
+                                let mut dragged = None;
+                                for i in 0..app.views.len() {
+                                    let Some(doc) = app.session.get(app.views[i].id) else { continue };
+                                    let Some(name) = crate::canvas::tab_label(app, i) else { continue };
+                                    let dirty = doc.dirty;
+                                    // A tab showing the document's title names its file on hover.
+                                    let file = (name != doc.name).then_some(doc.name.as_str());
+                                    let response = tab(
+                                        ui,
+                                        ui.id().with(("document-tab", app.views[i].id)),
+                                        &t,
+                                        "file-text",
+                                        &name,
+                                        file,
+                                        dirty,
+                                        app.active == Some(i),
+                                        &mut close,
+                                        i,
+                                        cap,
+                                        tab_h,
+                                        true,
+                                    );
+                                    slots.push((i, response.rect));
+                                    if response.dragged() || response.drag_stopped() {
+                                        dragged = Some((i, response.drag_stopped()));
+                                    }
+                                    if changed && app.active == Some(i) && !app.combine_showing() {
+                                        response.scroll_to_me(Some(Align::Center));
+                                    }
+                                    let id = app.views[i].id;
+                                    let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
+                                    response.context_menu(|ui| {
+                                        if ui.button(tl!("Close Tab")).clicked() {
+                                            action = Some(crate::tab_context::Action::Close(id));
+                                            ui.close();
+                                        }
+                                        if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
+                                            action = Some(crate::tab_context::Action::Reopen);
+                                            ui.close();
+                                        }
+                                        let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+                                        if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
+                                            action = Some(crate::tab_context::Action::Reveal(id));
+                                            ui.close();
+                                        }
+                                    });
+                                    if response.clicked() {
+                                        app.active = Some(i);
+                                    }
+                                    // A middle click closes the tab, as in Acrobat and browsers (#1853);
+                                    // unsaved changes ask first, as the close button does.
+                                    if response.middle_clicked() {
+                                        close = Some(i);
+                                    }
+                                }
+                                // Dragging a tab moves it (#1537): a line marks the gap it will land
+                                // in, and releasing the button drops it there.
+                                if let Some((from, released)) = dragged
+                                    && let Some(x) = ui.ctx().pointer_latest_pos().map(|p| p.x)
+                                {
+                                    let to = drop_index(&slots, from, x);
+                                    if released {
+                                        if close.is_none() && action.is_none() {
+                                            app.move_tab(from, to);
+                                        }
+                                    } else {
+                                        drag_x = Some(x);
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                        if let Some(marker) = drop_marker(&slots, from, to, ui.spacing().item_spacing.x) {
+                                            let span = slots.first().map_or(ui.max_rect().y_range(), |(_, r)| r.y_range());
+                                            // In front of the first tab the gap lies outside the scroll area's
+                                            // clip rect (#2225): keep the whole line inside it.
+                                            let clip = ui.clip_rect();
+                                            let marker = marker.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
+                                            ui.painter().vline(marker, span.shrink(4.0), Stroke::new(2.0, t.accent));
+                                        }
+                                    }
+                                }
+                                if let Some(i) = close
+                                    && let Some(view) = app.views.get(i)
+                                {
+                                    action.get_or_insert(crate::tab_context::Action::Close(view.id));
+                                }
+                                if let Some(action) = action {
+                                    app.tab_action(action);
+                                }
+                                if app.combine_tab.open {
+                                    // After the document tabs; its index can't clash with theirs.
+                                    let mut close = None;
+                                    let response = tab(
+                                        ui,
+                                        ui.id().with("combine-tab"),
+                                        &t,
+                                        "files",
+                                        tl!("Combine files"),
+                                        None,
+                                        false,
+                                        app.combine_showing(),
+                                        &mut close,
+                                        usize::MAX,
+                                        cap,
+                                        tab_h,
+                                        false,
+                                    );
+                                    if changed && app.combine_showing() {
+                                        response.scroll_to_me(Some(Align::Center));
+                                    }
+                                    if response.clicked() {
+                                        app.open_combine_tab();
+                                    }
+                                    if close.is_some() || response.middle_clicked() {
+                                        app.close_combine_tab();
+                                    }
+                                }
+                            });
+                        });
+                        let max = (out.content_size.x - out.inner_rect.width()).max(0.0);
+                        ui.data_mut(|d| d.insert_temp(scroll_id, (out.state.offset.x, max)));
+                        // A tab dragged to either edge of a strip that scrolls brings the hidden tabs in.
+                        if let Some(x) = drag_x
+                            && max > 0.0
+                        {
+                            let step = if x < out.inner_rect.left() + TAB_DRAG_EDGE {
+                                -TAB_DRAG_STEP
+                            } else if x > out.inner_rect.right() - TAB_DRAG_EDGE {
+                                TAB_DRAG_STEP
+                            } else {
+                                0.0
+                            };
+                            if step != 0.0 {
+                                ui.data_mut(|d| d.insert_temp(scroll_id.with("to"), (out.state.offset.x + step).clamp(0.0, max)));
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                    });
+                    if overflow && arrow(ui, "chevron-right", offset < max_offset - 0.5, tl!("Scroll tabs right")) {
+                        scroll_to = Some((offset + TAB_MIN_WIDTH + gap).min(max_offset));
+                    }
+                    if let Some(x) = scroll_to {
+                        ui.data_mut(|d| d.insert_temp(scroll_id.with("to"), x));
+                        ui.ctx().request_repaint();
+                    }
+                    ui.add_space(4.0);
+                    let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
+                    if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
+                        app.open_dialog();
+                    }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if !controls.right.is_empty() {
@@ -300,7 +303,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
                     // One click to the community, from anywhere in the app.
-                    if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
+                    if !app.embedded
+                        && widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h)
+                            .on_hover_text(pdfcraft_engine::links::DISCORD)
+                            .clicked()
+                    {
                         app.execute("help.discord");
                     }
                 });

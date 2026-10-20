@@ -814,6 +814,12 @@ pub struct PdfCraftApp {
     pub pending_full_screen: Option<DocId>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
+    /// Set by an app that embeds PdfCraft (such as HarshPad): its own tabs replace the Home
+    /// button, the document tabs and the Open button, and the community links, About and
+    /// update checks are hidden.
+    pub embedded: bool,
+    /// Where Help goes in an embedding app (instead of the project's GitHub page).
+    pub help_url: Option<String>,
 }
 
 /// Where in a document a request to open an address came from.
@@ -890,6 +896,8 @@ fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
 impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
+            embedded: false,
+            help_url: None,
             session: Session::new(),
             views: Vec::new(),
             closed_tabs: Vec::new(),
@@ -1791,6 +1799,11 @@ impl PdfCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    /// Commands an embedding app hides: community links, About and update checks.
+    pub fn hides_command(&self, id: &str) -> bool {
+        self.embedded && matches!(id, "help.discord" | "help.app_page" | "help.website" | "help.about" | "help.check_updates")
+    }
+
     pub fn open_path(&mut self, path: &str) {
         self.open_path_then(path, None);
     }
