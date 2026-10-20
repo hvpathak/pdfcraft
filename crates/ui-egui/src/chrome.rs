@@ -27,6 +27,10 @@ const TAB_HEIGHT: f32 = 30.0;
 const STRIP_BUTTON: f32 = 28.0;
 
 pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    // An embedding app brings its own tab bar; the theme and help buttons move to the mode bar.
+    if app.embedded {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     // macOS: the strip is the 28 pt title bar, so the traffic lights are centred in it; tabs and
     // buttons shrink to keep a margin above and below.
@@ -283,25 +287,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         });
                         ui.add_space(window_controls::SIDE_GAP - 4.0);
                     }
-                    let (icon, label) = match app.theme_preference {
-                        ThemePreference::System => ("monitor", tl!("Use system setting")),
-                        ThemePreference::Light => ("sun", tl!("Light gray")),
-                        ThemePreference::Dark => ("moon", tl!("Dark gray")),
-                    };
-                    let tip = format!("{}: {label}", tl!("Display theme"));
-                    let response = icons::button(ui, icon, button, false, &tip);
-                    // A click cycles System, Light, Dark; a right-click opens the menu.
-                    if response.clicked() {
-                        app.execute(match app.theme_preference {
-                            ThemePreference::System => "view.theme.light",
-                            ThemePreference::Light => "view.theme.dark",
-                            ThemePreference::Dark => "view.theme.system",
-                        });
-                    }
-                    egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
-                    if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
-                        app.dialog = Some(Dialog::Shortcuts);
-                    }
+                    theme_and_help(app, ui, button);
+
                     // One click to the community, from anywhere in the app.
                     if !app.embedded
                         && widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h)
@@ -315,8 +302,31 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// Both theme entry points use the same choices and command path.
-fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+/// The theme switch and the shortcuts button, right to left. In the tab strip normally; at the
+/// end of the mode bar when embedded, since an embedding app has no tab strip.
+fn theme_and_help(app: &mut PdfCraftApp, ui: &mut egui::Ui, button: f32) {
+    let (icon, label) = match app.theme_preference {
+        ThemePreference::System => ("monitor", tl!("Use system setting")),
+        ThemePreference::Light => ("sun", tl!("Light gray")),
+        ThemePreference::Dark => ("moon", tl!("Dark gray")),
+    };
+    let tip = format!("{}: {label}", tl!("Display theme"));
+    let response = icons::button(ui, icon, button, false, &tip);
+    // A click cycles System, Light, Dark; a right-click opens the menu.
+    if response.clicked() {
+        app.execute(match app.theme_preference {
+            ThemePreference::System => "view.theme.light",
+            ThemePreference::Light => "view.theme.dark",
+            ThemePreference::Dark => "view.theme.system",
+        });
+    }
+    egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
+    if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
+        app.dialog = Some(Dialog::Shortcuts);
+    }
+}
+
+/// Both theme entry points use the same choices and command path.fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     for (preference, command, label) in [
         (ThemePreference::System, "view.theme.system", "Use system setting"),
         (ThemePreference::Light, "view.theme.light", "Light gray"),
@@ -516,6 +526,10 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    // Embedded there is no tab strip, so its theme and help buttons end this row.
+                    if app.embedded {
+                        theme_and_help(app, ui, 32.0);
+                    }
                     let has_doc = app.active.is_some();
                     ui.add_enabled_ui(has_doc, |ui| {
                         let tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
